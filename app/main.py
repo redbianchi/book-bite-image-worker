@@ -3,10 +3,8 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from typing import Literal
 
-from fastapi import FastAPI, Header, HTTPException
-from pydantic import BaseModel, Field
+from flask import Flask, jsonify, request
 
 from app.dropbox_io import (
     DropboxConfigError,
@@ -21,55 +19,67 @@ from app.dropbox_io import (
 from app.image_generator import generate_images, slugify
 
 
-app = FastAPI(title="Book Bite Image Worker")
+app = Flask(__name__)
 
 
-class GenerateRequest(BaseModel):
-    folder_path: str = Field(..., description="Dropbox Book Bite folder path.")
-    slug: str | None = Field(None, description="Output filename slug. Defaults to folder name.")
-    duration: Literal["12", "13", "14", "15"] = "14"
-    layout: Literal["both", "app", "blog"] = "both"
-    raw_subfolder: str = "raw images"
-    output_subfolder: str = "generated images"
-    cover_filename: str = "cover.jpg"
-    author_filename: str = "author.jpg"
-    face_x: float | None = None
-    face_y: float | None = None
+def error_response(message: str, status_code: int):
+    response = jsonify({"status": "error", "detail": message})
+    response.status_code = status_code
+    return response
+
+
+def require_secret():
+    expected = os.getenv("WEBHOOK_SECRET")
+    if expected and request.headers.get("X-Book-Bite-Secret") != expected:
+        return error_response("Invalid webhook secret.", 401)
+    return None
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
-
-
-def require_secret(header_secret: str | None) -> None:
-    expected = os.getenv("WEBHOOK_SECRET")
-    if expected and header_secret != expected:
-        raise HTTPException(status_code=401, detail="Invalid webhook secret.")
+def health():
+    return jsonify({"status": "ok"})
 
 
 @app.post("/generate-book-bite")
-def generate_book_bite(
-    payload: GenerateRequest,
-    x_book_bite_secret: str | None = Header(default=None),
-) -> dict[str, object]:
-    require_secret(x_book_bite_secret)
+def generate_book_bite():
+    secret_error = require_secret()
+    if secret_error:
+        return secret_error
 
-    folder = clean_dropbox_path(payload.folder_path)
-    raw_folder = join_dropbox(folder, payload.raw_subfolder)
-    output_folder = join_dropbox(folder, payload.output_subfolder)
-    name = slugify(payload.slug or Path(folder).name)
+    payload = request.get_json(silent=True) or {}
+    folder_path = payload.get("folder_path")
+    if not folder_path:
+        return error_response("Missing required field: folder_path", 400)
+
+    duration = str(payload.get("duration", "14"))
+    if duration not in {"12", "13", "14", "15"}:
+        return error_response("duration must be one of: 12, 13, 14, 15", 400)
+
+    layout = payload.get("layout", "both")
+    if layout not in {"both", "app", "blog"}:
+        return error_response("layout must be one of: both, app, blog", 400)
+
+    folder = clean_dropbox_path(folder_path)
+    raw_subfolder = payload.get("raw_subfolder", "raw images")
+    output_subfolder = payload.get("output_subfolder", "generated images")
+    cover_filename = payload.get("cover_filename", "cover.jpg")
+    author_filename = payload.get("author_filename", "author.jpg")
+    raw_folder = join_dropbox(folder, raw_subfolder)
+    output_folder = join_dropbox(folder, output_subfolder)
+    name = slugify(payload.get("slug") or Path(folder).name)
+    face_x = payload.get("face_x")
+    face_y = payload.get("face_y")
 
     try:
         dbx = client()
     except DropboxConfigError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return error_response(str(exc), 500)
 
     try:
-        cover_dropbox_path = resolve_named_image(dbx, raw_folder, payload.cover_filename, ("cover", "jacket", "book"))
-        author_dropbox_path = resolve_named_image(dbx, raw_folder, payload.author_filename, ("author", "headshot", "photo", "web"))
+        cover_dropbox_path = resolve_named_image(dbx, raw_folder, cover_filename, ("cover", "jacket", "book"))
+        author_dropbox_path = resolve_named_image(dbx, raw_folder, author_filename, ("author", "headshot", "photo", "web"))
     except Exception as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return error_response(str(exc), 422)
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp = Path(temp_dir)
@@ -85,10 +95,10 @@ def generate_book_bite(
                 author_path=author_local,
                 out_dir=out_dir,
                 name=name,
-                duration=payload.duration,
-                layout=payload.layout,
-                face_x=payload.face_x,
-                face_y=payload.face_y,
+                duration=duration,
+                layout=layout,
+                face_x=float(face_x) if face_x is not None else None,
+                face_y=float(face_y) if face_y is not None else None,
             )
             ensure_folder(dbx, output_folder)
             uploaded = {}
@@ -96,19 +106,19 @@ def generate_book_bite(
                 remote_path = join_dropbox(output_folder, local_path.name)
                 shared_link = upload_file(dbx, local_path, remote_path)
                 uploaded[key] = {"path": remote_path, "url": shared_link}
-        except HTTPException:
-            raise
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            return error_response(str(exc), 500)
 
-    return {
-        "status": "generated",
-        "folder_path": folder,
-        "raw_folder": raw_folder,
-        "output_folder": output_folder,
-        "duration": payload.duration,
-        "layout": payload.layout,
-        "cover": cover_dropbox_path,
-        "author": author_dropbox_path,
-        "outputs": uploaded,
-    }
+    return jsonify(
+        {
+            "status": "generated",
+            "folder_path": folder,
+            "raw_folder": raw_folder,
+            "output_folder": output_folder,
+            "duration": duration,
+            "layout": layout,
+            "cover": cover_dropbox_path,
+            "author": author_dropbox_path,
+            "outputs": uploaded,
+        }
+    )
