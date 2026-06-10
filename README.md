@@ -1,6 +1,6 @@
 # Book Bite Render Worker
 
-Small FastAPI service for generating Book Bite images from Dropbox assets.
+Small Flask service for generating Book Bite images from Dropbox assets.
 
 ## Dropbox folder convention
 
@@ -35,8 +35,38 @@ generated images/
    - `WEBHOOK_SECRET`: a long random string Zapier must send in the `X-Book-Bite-Secret` header.
    - For quick testing: `DROPBOX_ACCESS_TOKEN`
    - For production: `DROPBOX_REFRESH_TOKEN`, `DROPBOX_APP_KEY`, and `DROPBOX_APP_SECRET`
+   - If the Dropbox API can see your personal folders but not the shared/team folder, add `DROPBOX_USE_ROOT_NAMESPACE` with value `true`.
 
 The "Generated access token" button in the Dropbox app console creates an access token, not a refresh token. Use it for a smoke test by setting `DROPBOX_ACCESS_TOKEN` in Render. For production, use a refresh token so the service keeps working after short-lived access tokens expire.
+
+## Dropbox team folder access
+
+Some Dropbox Business accounts have a separate team root. On a Mac, this can look like two areas in Finder, such as:
+
+```text
+Christopher Chaput/
+Heleo Team Folder/
+```
+
+By default, the Dropbox API may only look inside the member/personal area. If `debug/list-folder` can list folders such as `/Author Uploads` but cannot find `/Heleo Team Folder`, turn on team-root mode:
+
+1. In the Dropbox app console, make sure the app has `account_info.read` plus the file read/write scopes you already selected.
+2. Generate a new token after changing scopes.
+3. In Render, update the Dropbox token.
+4. In Render, add:
+
+```text
+DROPBOX_USE_ROOT_NAMESPACE=true
+```
+
+Then redeploy and test:
+
+```text
+POST /debug/account
+POST /debug/list-folder
+```
+
+Use `/debug/account` to confirm Dropbox is returning a `root_namespace_id`. Use `/debug/list-folder` with `{"folder_path": "/"}` to check whether the team folder is now visible.
 
 ## Zapier request
 
