@@ -14,3 +14,5 @@ services:
         sync: false
       - key: DROPBOX_APP_SECRET
         sync: false
+      - key: DROPBOX_ACCESS_TOKEN
+        sync: false
