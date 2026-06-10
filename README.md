@@ -29,7 +29,7 @@ generated images/
 2. In Render, create a new Web Service from the repo.
 3. Use:
    - Build command: `pip install -r requirements.txt`
-   - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+   - Start command: `gunicorn app.main:app --bind 0.0.0.0:$PORT`
 4. Add environment variables:
    - `PYTHON_VERSION`: `3.12.8`
    - `WEBHOOK_SECRET`: a long random string Zapier must send in the `X-Book-Bite-Secret` header.
