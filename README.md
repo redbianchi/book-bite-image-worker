@@ -32,11 +32,10 @@ generated images/
    - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 4. Add environment variables:
    - `WEBHOOK_SECRET`: a long random string Zapier must send in the `X-Book-Bite-Secret` header.
-   - `DROPBOX_REFRESH_TOKEN`
-   - `DROPBOX_APP_KEY`
-   - `DROPBOX_APP_SECRET`
+   - For quick testing: `DROPBOX_ACCESS_TOKEN`
+   - For production: `DROPBOX_REFRESH_TOKEN`, `DROPBOX_APP_KEY`, and `DROPBOX_APP_SECRET`
 
-`DROPBOX_ACCESS_TOKEN` also works for early testing, but a refresh token is better for production.
+The "Generated access token" button in the Dropbox app console creates an access token, not a refresh token. Use it for a smoke test by setting `DROPBOX_ACCESS_TOKEN` in Render. For production, use a refresh token so the service keeps working after short-lived access tokens expire.
 
 ## Zapier request
 
