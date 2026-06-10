@@ -40,6 +40,18 @@ def health():
     return jsonify({"status": "ok"})
 
 
+@app.get("/")
+def root():
+    return jsonify(
+        {
+            "status": "ok",
+            "service": "Book Bite Image Worker",
+            "health": "/health",
+            "generate": "/generate-book-bite",
+        }
+    )
+
+
 @app.post("/generate-book-bite")
 def generate_book_bite():
     secret_error = require_secret()
@@ -120,5 +132,38 @@ def generate_book_bite():
             "cover": cover_dropbox_path,
             "author": author_dropbox_path,
             "outputs": uploaded,
+        }
+    )
+
+
+@app.post("/debug/list-folder")
+def debug_list_folder():
+    secret_error = require_secret()
+    if secret_error:
+        return secret_error
+
+    payload = request.get_json(silent=True) or {}
+    folder = clean_dropbox_path(payload.get("folder_path", ""))
+
+    try:
+        dbx = client()
+        entries = dbx.files_list_folder(folder).entries
+    except DropboxConfigError as exc:
+        return error_response(str(exc), 500)
+    except Exception as exc:
+        return error_response(str(exc), 422)
+
+    return jsonify(
+        {
+            "status": "ok",
+            "folder_path": folder or "/",
+            "entries": [
+                {
+                    "name": getattr(entry, "name", ""),
+                    "path": getattr(entry, "path_display", None) or getattr(entry, "path_lower", None),
+                    "type": entry.__class__.__name__,
+                }
+                for entry in entries
+            ],
         }
     )

@@ -81,7 +81,12 @@ def resolve_named_image(dbx: dropbox.Dropbox, folder_path: str, preferred_name: 
     except ApiError:
         pass
 
-    entries = dbx.files_list_folder(folder_path).entries
+    try:
+        entries = dbx.files_list_folder(folder_path).entries
+    except ApiError as exc:
+        if exc.error.is_path() and exc.error.get_path().is_not_found():
+            raise FileNotFoundError(f"Dropbox folder not found: {folder_path}") from exc
+        raise
     image_entries = [
         entry
         for entry in entries
