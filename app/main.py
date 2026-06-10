@@ -8,6 +8,7 @@ from flask import Flask, jsonify, request
 
 from app.dropbox_io import (
     DropboxConfigError,
+    account_summary,
     clean_dropbox_path,
     client,
     download_file,
@@ -48,6 +49,8 @@ def root():
             "service": "Book Bite Image Worker",
             "health": "/health",
             "generate": "/generate-book-bite",
+            "debug_account": "/debug/account",
+            "debug_list_folder": "/debug/list-folder",
         }
     )
 
@@ -167,3 +170,19 @@ def debug_list_folder():
             ],
         }
     )
+
+
+@app.post("/debug/account")
+def debug_account():
+    secret_error = require_secret()
+    if secret_error:
+        return secret_error
+
+    try:
+        summary = account_summary()
+    except DropboxConfigError as exc:
+        return error_response(str(exc), 500)
+    except Exception as exc:
+        return error_response(str(exc), 422)
+
+    return jsonify({"status": "ok", "dropbox": summary})

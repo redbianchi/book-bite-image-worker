@@ -4,6 +4,7 @@ import os
 from pathlib import Path, PurePosixPath
 
 import dropbox
+from dropbox.common import PathRoot
 from dropbox.exceptions import ApiError
 from dropbox.files import WriteMode
 
@@ -15,7 +16,7 @@ class DropboxConfigError(RuntimeError):
     pass
 
 
-def client() -> dropbox.Dropbox:
+def base_client() -> dropbox.Dropbox:
     refresh_token = os.getenv("DROPBOX_REFRESH_TOKEN")
     app_key = os.getenv("DROPBOX_APP_KEY")
     app_secret = os.getenv("DROPBOX_APP_SECRET")
@@ -26,6 +27,60 @@ def client() -> dropbox.Dropbox:
     if access_token:
         return dropbox.Dropbox(access_token)
     raise DropboxConfigError("Set DROPBOX_REFRESH_TOKEN + DROPBOX_APP_KEY + DROPBOX_APP_SECRET, or DROPBOX_ACCESS_TOKEN.")
+
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _root_namespace_id(dbx: dropbox.Dropbox) -> str:
+    try:
+        account = dbx.users_get_current_account()
+    except Exception as exc:
+        raise DropboxConfigError(
+            "Dropbox root namespace mode requires the account_info.read scope. "
+            "Add that scope in the Dropbox app console, then generate a new token."
+        ) from exc
+
+    root_info = getattr(account, "root_info", None)
+    root_namespace_id = getattr(root_info, "root_namespace_id", None)
+    if not root_namespace_id:
+        raise DropboxConfigError("Could not read a root namespace ID from the Dropbox account.")
+    return root_namespace_id
+
+
+def with_configured_path_root(dbx: dropbox.Dropbox) -> dropbox.Dropbox:
+    root_namespace_id = os.getenv("DROPBOX_ROOT_NAMESPACE_ID", "").strip()
+    path_root = os.getenv("DROPBOX_PATH_ROOT", "").strip().lower()
+
+    if root_namespace_id:
+        return dbx.with_path_root(PathRoot.root(root_namespace_id))
+    if path_root in {"root", "team", "team_root"} or _env_flag("DROPBOX_USE_ROOT_NAMESPACE"):
+        return dbx.with_path_root(PathRoot.root(_root_namespace_id(dbx)))
+    if path_root == "home":
+        return dbx.with_path_root(PathRoot.home)
+    return dbx
+
+
+def client() -> dropbox.Dropbox:
+    return with_configured_path_root(base_client())
+
+
+def account_summary() -> dict:
+    dbx = base_client()
+    account = dbx.users_get_current_account()
+    root_info = getattr(account, "root_info", None)
+    return {
+        "account_id": getattr(account, "account_id", None),
+        "email": getattr(account, "email", None),
+        "name": getattr(getattr(account, "name", None), "display_name", None),
+        "root_namespace_id": getattr(root_info, "root_namespace_id", None),
+        "home_namespace_id": getattr(root_info, "home_namespace_id", None),
+        "home_path": getattr(root_info, "home_path", None),
+        "configured_path_root": os.getenv("DROPBOX_PATH_ROOT", ""),
+        "use_root_namespace": _env_flag("DROPBOX_USE_ROOT_NAMESPACE"),
+        "has_explicit_root_namespace_id": bool(os.getenv("DROPBOX_ROOT_NAMESPACE_ID", "").strip()),
+    }
 
 
 def clean_dropbox_path(path: str) -> str:
