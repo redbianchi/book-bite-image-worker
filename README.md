@@ -31,6 +31,7 @@ generated images/
    - Build command: `pip install -r requirements.txt`
    - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 4. Add environment variables:
+   - `PYTHON_VERSION`: `3.12.8`
    - `WEBHOOK_SECRET`: a long random string Zapier must send in the `X-Book-Bite-Secret` header.
    - For quick testing: `DROPBOX_ACCESS_TOKEN`
    - For production: `DROPBOX_REFRESH_TOKEN`, `DROPBOX_APP_KEY`, and `DROPBOX_APP_SECRET`
