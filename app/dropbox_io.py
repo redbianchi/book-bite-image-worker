@@ -83,6 +83,17 @@ def account_summary() -> dict:
     }
 
 
+def resolve_shared_folder_link(dbx: dropbox.Dropbox, url: str) -> str:
+    metadata = dbx.sharing_get_shared_link_metadata(url)
+    folder_path = getattr(metadata, "path_lower", None) or getattr(metadata, "path_display", None)
+    if not folder_path:
+        raise FileNotFoundError(
+            "Could not turn the Dropbox shared link into a folder path. "
+            "Use the full Dropbox folder path instead."
+        )
+    return clean_dropbox_path(folder_path)
+
+
 def clean_dropbox_path(path: str) -> str:
     path = path.strip()
     if not path.startswith("/"):

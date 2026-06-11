@@ -14,6 +14,7 @@ from app.dropbox_io import (
     download_file,
     ensure_folder,
     join_dropbox,
+    resolve_shared_folder_link,
     resolve_named_image,
     upload_file,
 )
@@ -63,8 +64,9 @@ def generate_book_bite():
 
     payload = request.get_json(silent=True) or {}
     folder_path = payload.get("folder_path")
-    if not folder_path:
-        return error_response("Missing required field: folder_path", 400)
+    folder_url = payload.get("folder_url") or payload.get("dropbox_url") or payload.get("dropbox_link")
+    if not folder_path and not folder_url:
+        return error_response("Missing required field: folder_path or folder_url", 400)
 
     duration = str(payload.get("duration", "14"))
     if duration not in {"12", "13", "14", "15"}:
@@ -74,14 +76,10 @@ def generate_book_bite():
     if layout not in {"both", "app", "blog"}:
         return error_response("layout must be one of: both, app, blog", 400)
 
-    folder = clean_dropbox_path(folder_path)
     raw_subfolder = payload.get("raw_subfolder", "raw images")
     output_subfolder = payload.get("output_subfolder", "generated images")
     cover_filename = payload.get("cover_filename", "cover.jpg")
     author_filename = payload.get("author_filename", "author.jpg")
-    raw_folder = join_dropbox(folder, raw_subfolder)
-    output_folder = join_dropbox(folder, output_subfolder)
-    name = slugify(payload.get("slug") or Path(folder).name)
     face_x = payload.get("face_x")
     face_y = payload.get("face_y")
 
@@ -89,6 +87,15 @@ def generate_book_bite():
         dbx = client()
     except DropboxConfigError as exc:
         return error_response(str(exc), 500)
+
+    try:
+        folder = clean_dropbox_path(folder_path) if folder_path else resolve_shared_folder_link(dbx, folder_url)
+    except Exception as exc:
+        return error_response(str(exc), 422)
+
+    raw_folder = join_dropbox(folder, raw_subfolder)
+    output_folder = join_dropbox(folder, output_subfolder)
+    name = slugify(payload.get("slug") or Path(folder).name)
 
     try:
         cover_dropbox_path = resolve_named_image(dbx, raw_folder, cover_filename, ("cover", "jacket", "book"))
@@ -146,10 +153,17 @@ def debug_list_folder():
         return secret_error
 
     payload = request.get_json(silent=True) or {}
-    folder = clean_dropbox_path(payload.get("folder_path", ""))
+    folder_path = payload.get("folder_path")
+    folder_url = payload.get("folder_url") or payload.get("dropbox_url") or payload.get("dropbox_link")
 
     try:
         dbx = client()
+        if folder_path:
+            folder = clean_dropbox_path(folder_path)
+        elif folder_url:
+            folder = resolve_shared_folder_link(dbx, folder_url)
+        else:
+            folder = "/"
         entries = dbx.files_list_folder(folder).entries
     except DropboxConfigError as exc:
         return error_response(str(exc), 500)
