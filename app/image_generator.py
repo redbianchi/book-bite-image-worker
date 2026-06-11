@@ -183,9 +183,12 @@ def portrait_crop_hints(
     face_y: float | None = None,
 ) -> PortraitCropHints:
     width, height = portrait.size
+    is_landscape_portrait = width / height > 1.25
     default_face_x = width / 2
     default_face_y = height * 0.35
     default_app_crop_width = round(width * 0.825)
+    if is_landscape_portrait:
+        default_app_crop_width = min(default_app_crop_width, round(height * 0.92))
     default_blog_crop_size = round(min(portrait.size) * 0.52)
 
     if face_x is not None or face_y is not None:
