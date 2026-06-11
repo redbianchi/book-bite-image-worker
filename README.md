@@ -94,6 +94,17 @@ Body:
 }
 ```
 
+If Notion has a Dropbox shared folder link instead of a Dropbox path, send `folder_url` instead:
+
+```json
+{
+  "folder_url": "https://www.dropbox.com/sh/...",
+  "slug": "amy_kurtz_but_you_look_fine",
+  "duration": "12",
+  "layout": "both"
+}
+```
+
 Optional crop tuning:
 
 ```json
