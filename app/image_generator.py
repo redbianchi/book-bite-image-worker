@@ -279,10 +279,17 @@ def generate_app(
     author_center_x = round((book_right + width) / 2)
 
     panel_w = width - app_panel_x
+    max_crop_w_without_padding = round(portrait.height * panel_w / height)
+    if portrait.width / portrait.height > panel_w / height:
+        crop_w = min(crop_w, max_crop_w_without_padding)
     crop_h = round(crop_w * height / panel_w)
     face_panel_x = author_center_x - app_panel_x
     crop_left = round(face_x - face_panel_x * crop_w / panel_w)
     crop_top = round(face_y - 250 * crop_h / height)
+    if crop_w <= portrait.width:
+        crop_left = min(max(0, crop_left), portrait.width - crop_w)
+    if crop_h <= portrait.height:
+        crop_top = min(max(0, crop_top), portrait.height - crop_h)
     portrait_panel = crop_with_mirror_padding(portrait, crop_left, crop_top, crop_w, crop_h)
     portrait_panel = portrait_panel.resize((panel_w, height), Image.Resampling.LANCZOS)
     canvas.paste(portrait_panel, (app_panel_x, 0))
