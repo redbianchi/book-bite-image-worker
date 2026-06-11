@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
@@ -15,6 +16,14 @@ BLOG_INFO_BY_MINUTES = {
     "14": ASSETS_DIR / "blog-info-14min.png",
     "15": ASSETS_DIR / "blog-info-15min.png",
 }
+
+
+@dataclass(frozen=True)
+class PortraitCropHints:
+    face_x: float
+    face_y: float
+    app_crop_width: int
+    blog_crop_size: int
 
 
 def slugify(value: str) -> str:
@@ -84,6 +93,147 @@ def crop_with_mirror_padding(image: Image.Image, left: int, top: int, width: int
     return image.crop((left, top, left + width, top + height))
 
 
+def _box_area(box: tuple[float, float, float, float]) -> float:
+    return box[2] * box[3]
+
+
+def _box_iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    left = max(ax, bx)
+    top = max(ay, by)
+    right = min(ax + aw, bx + bw)
+    bottom = min(ay + ah, by + bh)
+    if right <= left or bottom <= top:
+        return 0
+    intersection = (right - left) * (bottom - top)
+    return intersection / (_box_area(a) + _box_area(b) - intersection)
+
+
+def _dedupe_boxes(boxes: list[tuple[float, float, float, float]]) -> list[tuple[float, float, float, float]]:
+    kept: list[tuple[float, float, float, float]] = []
+    for box in sorted(boxes, key=_box_area, reverse=True):
+        if all(_box_iou(box, existing) < 0.35 for existing in kept):
+            kept.append(box)
+    return kept
+
+
+def _detect_faces(portrait: Image.Image) -> list[tuple[float, float, float, float]]:
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        return []
+
+    width, height = portrait.size
+    rgb = np.array(portrait.convert("RGB"))
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+
+    scale = min(1.0, 1000 / max(width, height))
+    if scale < 1:
+        gray_small = cv2.resize(gray, (round(width * scale), round(height * scale)), interpolation=cv2.INTER_AREA)
+    else:
+        gray_small = gray
+    gray_small = cv2.equalizeHist(gray_small)
+
+    def detect_with_cascade(cascade_name: str, image, flipped: bool = False) -> list[tuple[float, float, float, float]]:
+        cascade_path = Path(cv2.data.haarcascades) / cascade_name
+        cascade = cv2.CascadeClassifier(str(cascade_path))
+        if cascade.empty():
+            return []
+        min_size = max(28, round(min(image.shape[:2]) * 0.08))
+        found = cascade.detectMultiScale(
+            image,
+            scaleFactor=1.05,
+            minNeighbors=4,
+            minSize=(min_size, min_size),
+        )
+        boxes: list[tuple[float, float, float, float]] = []
+        image_w = image.shape[1]
+        for x, y, w, h in found:
+            if flipped:
+                x = image_w - x - w
+            boxes.append((x / scale, y / scale, w / scale, h / scale))
+        return boxes
+
+    boxes: list[tuple[float, float, float, float]] = []
+    boxes.extend(detect_with_cascade("haarcascade_frontalface_default.xml", gray_small))
+    boxes.extend(detect_with_cascade("haarcascade_frontalface_alt2.xml", gray_small))
+    boxes.extend(detect_with_cascade("haarcascade_profileface.xml", gray_small))
+    boxes.extend(
+        detect_with_cascade(
+            "haarcascade_profileface.xml",
+            cv2.flip(gray_small, 1),
+            flipped=True,
+        )
+    )
+
+    min_area = width * height * 0.01
+    filtered = [
+        box
+        for box in boxes
+        if _box_area(box) >= min_area and box[2] > 0 and box[3] > 0
+    ]
+    return _dedupe_boxes(filtered)
+
+
+def portrait_crop_hints(
+    portrait: Image.Image,
+    face_x: float | None = None,
+    face_y: float | None = None,
+) -> PortraitCropHints:
+    width, height = portrait.size
+    default_face_x = width / 2
+    default_face_y = height * 0.35
+    default_app_crop_width = round(width * 0.825)
+    default_blog_crop_size = round(min(portrait.size) * 0.52)
+
+    if face_x is not None or face_y is not None:
+        return PortraitCropHints(
+            face_x=face_x if face_x is not None else default_face_x,
+            face_y=face_y if face_y is not None else default_face_y,
+            app_crop_width=default_app_crop_width,
+            blog_crop_size=default_blog_crop_size,
+        )
+
+    faces = _detect_faces(portrait)
+    if not faces:
+        return PortraitCropHints(default_face_x, default_face_y, default_app_crop_width, default_blog_crop_size)
+
+    max_area = _box_area(faces[0])
+    selected = [box for box in faces if _box_area(box) >= max_area * 0.35]
+    left = min(box[0] for box in selected)
+    top = min(box[1] for box in selected)
+    right = max(box[0] + box[2] for box in selected)
+    bottom = max(box[1] + box[3] for box in selected)
+    face_w = right - left
+    face_h = bottom - top
+    tightness = max(face_w / width, face_h / height)
+
+    face_center_x = left + face_w / 2
+    face_center_y = top + face_h * (0.62 if tightness > 0.62 else 0.56)
+
+    max_dim = max(width, height)
+    max_crop = round(max_dim * 0.95)
+    if len(selected) > 1:
+        blog_crop = max(default_blog_crop_size, face_w * 1.35, face_h * 1.45)
+        app_crop = max(default_app_crop_width, face_w * 1.35, face_h * 1.35)
+    else:
+        blog_crop = max(default_blog_crop_size, face_w * 1.65, face_h * 1.75)
+        app_crop = max(default_app_crop_width, face_w * 1.45, face_h * 1.55)
+
+    if tightness > 0.62:
+        blog_crop = max(blog_crop, face_h * 1.9)
+        app_crop = max(app_crop, face_h * 1.65)
+
+    return PortraitCropHints(
+        face_x=face_center_x,
+        face_y=face_center_y,
+        app_crop_width=round(min(max_crop, app_crop)),
+        blog_crop_size=round(min(max_crop, blog_crop)),
+    )
+
+
 def make_author_badge(portrait: Image.Image, size: int, face_x: float, face_y: float, crop_size: int) -> Image.Image:
     scale = 8
     big_size = size * scale
@@ -110,7 +260,15 @@ def make_author_badge(portrait: Image.Image, size: int, face_x: float, face_y: f
     return out.resize((size, size), Image.Resampling.LANCZOS)
 
 
-def generate_app(cover: Image.Image, portrait: Image.Image, out_dir: Path, name: str, face_x: float, face_y: float) -> dict[str, Path]:
+def generate_app(
+    cover: Image.Image,
+    portrait: Image.Image,
+    out_dir: Path,
+    name: str,
+    face_x: float,
+    face_y: float,
+    crop_w: int,
+) -> dict[str, Path]:
     width, height = 1080, 608
     canvas = open_rgb(APP_TEMPLATE).resize((width, height), Image.Resampling.LANCZOS)
 
@@ -121,7 +279,6 @@ def generate_app(cover: Image.Image, portrait: Image.Image, out_dir: Path, name:
     author_center_x = round((book_right + width) / 2)
 
     panel_w = width - app_panel_x
-    crop_w = round(portrait.width * 0.825)
     crop_h = round(crop_w * height / panel_w)
     face_panel_x = author_center_x - app_panel_x
     crop_left = round(face_x - face_panel_x * crop_w / panel_w)
@@ -148,6 +305,7 @@ def generate_blog(
     duration: str,
     face_x: float,
     face_y: float,
+    blog_crop_size: int,
 ) -> dict[str, Path]:
     width, height = 717, 448
     canvas = Image.new("RGBA", (width, height), "white")
@@ -163,7 +321,7 @@ def generate_blog(
     cover_scaled = cover.resize((cover_w, cover_h), Image.Resampling.LANCZOS).convert("RGBA")
     canvas.alpha_composite(cover_scaled, (cover_x, cover_y))
 
-    badge = make_author_badge(portrait, 116, face_x, face_y, round(min(portrait.size) * 0.52))
+    badge = make_author_badge(portrait, 116, face_x, face_y, blog_crop_size)
     canvas.alpha_composite(badge, (248, 306))
 
     info = open_rgba(BLOG_INFO_BY_MINUTES[duration])
@@ -189,14 +347,34 @@ def generate_images(
 ) -> dict[str, Path]:
     cover = open_rgb(cover_path)
     portrait = open_rgb(author_path)
-    face_x = face_x if face_x is not None else portrait.width / 2
-    face_y = face_y if face_y is not None else portrait.height * 0.35
+    crop_hints = portrait_crop_hints(portrait, face_x=face_x, face_y=face_y)
     name = slugify(name)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     outputs: dict[str, Path] = {}
     if layout in ("both", "app"):
-        outputs.update(generate_app(cover, portrait, out_dir, name, face_x, face_y))
+        outputs.update(
+            generate_app(
+                cover,
+                portrait,
+                out_dir,
+                name,
+                crop_hints.face_x,
+                crop_hints.face_y,
+                crop_hints.app_crop_width,
+            )
+        )
     if layout in ("both", "blog"):
-        outputs.update(generate_blog(cover, portrait, out_dir, name, duration, face_x, face_y))
+        outputs.update(
+            generate_blog(
+                cover,
+                portrait,
+                out_dir,
+                name,
+                duration,
+                crop_hints.face_x,
+                crop_hints.face_y,
+                crop_hints.blog_crop_size,
+            )
+        )
     return outputs
