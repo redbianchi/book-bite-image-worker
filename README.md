@@ -23,6 +23,8 @@ generated images/
   [slug]_blog_inline_717x448.jpg
 ```
 
+The image generator automatically tries to detect faces in `author.jpg`. When it finds a face or face group, it centers the author crop and zooms out for tight archival portraits. If detection fails, it falls back to the standard crop.
+
 ## Render setup
 
 1. Put this folder in a GitHub repository.
@@ -100,10 +102,11 @@ If Notion has a Dropbox shared folder link instead of a Dropbox path, send `fold
 {
   "folder_url": "https://www.dropbox.com/sh/...",
   "slug": "amy_kurtz_but_you_look_fine",
-  "duration": "12",
-  "layout": "both"
+  "duration": "12"
 }
 ```
+
+`layout` is optional and defaults to `both`. Use `"layout": "app"` or `"layout": "blog"` only when you want one output type.
 
 Optional crop tuning:
 
