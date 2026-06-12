@@ -14,6 +14,7 @@ from app.dropbox_io import (
     download_file,
     ensure_folder,
     join_dropbox,
+    resolve_optional_named_image,
     resolve_shared_folder_link,
     resolve_named_image,
     upload_file,
@@ -80,6 +81,7 @@ def generate_book_bite():
     output_subfolder = payload.get("output_subfolder", "generated images")
     cover_filename = payload.get("cover_filename", "cover.jpg")
     author_filename = payload.get("author_filename", "author.jpg")
+    author2_filename = payload.get("author2_filename", "author2.jpg")
     face_x = payload.get("face_x")
     face_y = payload.get("face_y")
 
@@ -100,6 +102,12 @@ def generate_book_bite():
     try:
         cover_dropbox_path = resolve_named_image(dbx, raw_folder, cover_filename, ("cover", "jacket", "book"))
         author_dropbox_path = resolve_named_image(dbx, raw_folder, author_filename, ("author", "headshot", "photo", "web"))
+        author2_dropbox_path = resolve_optional_named_image(
+            dbx,
+            raw_folder,
+            author2_filename,
+            ("author2", "author 2", "second author", "coauthor", "co-author"),
+        )
     except Exception as exc:
         return error_response(str(exc), 422)
 
@@ -107,14 +115,18 @@ def generate_book_bite():
         temp = Path(temp_dir)
         cover_local = temp / "cover"
         author_local = temp / "author"
+        author2_local = temp / "author2" if author2_dropbox_path else None
         out_dir = temp / "outputs"
 
         try:
             download_file(dbx, cover_dropbox_path, cover_local)
             download_file(dbx, author_dropbox_path, author_local)
+            if author2_dropbox_path and author2_local:
+                download_file(dbx, author2_dropbox_path, author2_local)
             outputs = generate_images(
                 cover_path=cover_local,
                 author_path=author_local,
+                author2_path=author2_local,
                 out_dir=out_dir,
                 name=name,
                 duration=duration,
@@ -141,6 +153,7 @@ def generate_book_bite():
             "layout": layout,
             "cover": cover_dropbox_path,
             "author": author_dropbox_path,
+            "author2": author2_dropbox_path,
             "outputs": uploaded,
         }
     )

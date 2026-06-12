@@ -169,3 +169,15 @@ def resolve_named_image(dbx: dropbox.Dropbox, folder_path: str, preferred_name: 
 
     names = ", ".join(getattr(entry, "name", "") for entry in image_entries) or "no images found"
     raise FileNotFoundError(f"Could not resolve {preferred_name} in {folder_path}. Images found: {names}")
+
+
+def resolve_optional_named_image(
+    dbx: dropbox.Dropbox,
+    folder_path: str,
+    preferred_name: str,
+    keywords: tuple[str, ...],
+) -> str | None:
+    try:
+        return resolve_named_image(dbx, folder_path, preferred_name, keywords)
+    except FileNotFoundError:
+        return None
