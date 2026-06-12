@@ -11,6 +11,7 @@ Each Book Bite folder should contain:
   raw images/
     cover.jpg
     author.jpg
+    author2.jpg  # optional, only for two separate author photos
   generated images/
 ```
 
@@ -23,7 +24,12 @@ generated images/
   [slug]_blog_inline_717x448.jpg
 ```
 
-The image generator automatically tries to detect faces in `author.jpg`. When it finds a face or face group, it centers the author crop and zooms out for tight archival portraits. If detection fails, it falls back to the standard crop.
+The image generator automatically tries to detect faces in `author.jpg`. When it finds a face or face group, it centers the author crop and zooms out for tight archival portraits. If detection fails, it falls back to the standard crop. Wide author photos are cropped closer so the app image lands around a head-and-shoulders / upper-biceps frame instead of showing the full torso.
+
+For two-author books:
+
+- If both authors are already in one photo, use that file as `author.jpg`.
+- If the authors are in two separate photos, use `author.jpg` and `author2.jpg`. The app image will place both authors as upper-body cutouts on a light gray background, try to keep the heads at a similar visual size, and align the head tops near the top of the book. No Zapier or Notion setting changes are needed.
 
 ## Render setup
 
