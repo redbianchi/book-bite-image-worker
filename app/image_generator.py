@@ -23,6 +23,7 @@ class PortraitCropHints:
     face_x: float
     face_y: float
     face_height: float
+    head_top_y: float
     app_crop_width: int
     blog_crop_size: int
     is_landscape: bool
@@ -186,6 +187,82 @@ def _detect_faces(portrait: Image.Image) -> list[tuple[float, float, float, floa
     return _dedupe_boxes(filtered)
 
 
+def _guess_skin_tone_face(portrait: Image.Image) -> tuple[float, float, float, float] | None:
+    width, height = portrait.size
+    small_w = min(320, width)
+    small_h = round(height * small_w / width)
+    small = portrait.convert("RGB").resize((small_w, small_h), Image.Resampling.BILINEAR)
+    pixels = small.load()
+    scan_h = round(small_h * 0.46)
+    mask = [[False] * small_w for _ in range(scan_h)]
+    for y in range(scan_h):
+        for x in range(small_w):
+            r, g, b = pixels[x, y]
+            max_c = max(r, g, b)
+            min_c = min(r, g, b)
+            looks_like_skin = (
+                r > 80
+                and g > 45
+                and b > 25
+                and max_c - min_c > 12
+                and r >= g * 0.92
+                and r > b * 1.08
+                and g > b * 0.82
+                and abs(r - g) < 95
+            )
+            if looks_like_skin:
+                mask[y][x] = True
+
+    visited = [[False] * small_w for _ in range(scan_h)]
+    components: list[tuple[int, int, int, int, int]] = []
+    for y in range(scan_h):
+        for x in range(small_w):
+            if visited[y][x] or not mask[y][x]:
+                continue
+            stack = [(x, y)]
+            visited[y][x] = True
+            min_x = max_x = x
+            min_y = max_y = y
+            area = 0
+            while stack:
+                cx, cy = stack.pop()
+                area += 1
+                min_x = min(min_x, cx)
+                max_x = max(max_x, cx)
+                min_y = min(min_y, cy)
+                max_y = max(max_y, cy)
+                for nx, ny in ((cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)):
+                    if 0 <= nx < small_w and 0 <= ny < scan_h and not visited[ny][nx] and mask[ny][nx]:
+                        visited[ny][nx] = True
+                        stack.append((nx, ny))
+            box_w = max_x - min_x + 1
+            box_h = max_y - min_y + 1
+            if area >= 45 and box_w >= 8 and box_h >= 8:
+                components.append((min_x, min_y, max_x, max_y, area))
+
+    if not components:
+        return None
+
+    def score(component: tuple[int, int, int, int, int]) -> float:
+        min_x, min_y, max_x, max_y, area = component
+        box_w = max_x - min_x + 1
+        box_h = max_y - min_y + 1
+        shape_penalty = 0.45 if box_w > box_h * 2.2 else 1.0
+        height_penalty = 0.35 if box_h > small_h * 0.30 else 1.0
+        top_bonus = 1.0 + max(0, (small_h * 0.48 - min_y) / small_h)
+        return area * shape_penalty * height_penalty * top_bonus
+
+    min_x, min_y, max_x, max_y, _area = max(components, key=score)
+    scale_x = width / small_w
+    scale_y = height / small_h
+    return (
+        min_x * scale_x,
+        min_y * scale_y,
+        (max_x - min_x + 1) * scale_x,
+        (max_y - min_y + 1) * scale_y,
+    )
+
+
 def portrait_crop_hints(
     portrait: Image.Image,
     face_x: float | None = None,
@@ -195,6 +272,8 @@ def portrait_crop_hints(
     is_landscape_portrait = width / height > 1.25
     default_face_x = width / 2
     default_face_y = height * 0.35
+    default_face_h = min(width, height) * 0.26
+    default_head_top_y = max(0, default_face_y - default_face_h * 0.72)
     default_app_crop_width = round(width * 0.825)
     if is_landscape_portrait:
         default_app_crop_width = min(default_app_crop_width, round(height * 0.64))
@@ -204,7 +283,8 @@ def portrait_crop_hints(
         return PortraitCropHints(
             face_x=face_x if face_x is not None else default_face_x,
             face_y=face_y if face_y is not None else default_face_y,
-            face_height=min(width, height) * 0.26,
+            face_height=default_face_h,
+            head_top_y=max(0, (face_y if face_y is not None else default_face_y) - default_face_h * 0.72),
             app_crop_width=default_app_crop_width,
             blog_crop_size=default_blog_crop_size,
             is_landscape=is_landscape_portrait,
@@ -213,10 +293,31 @@ def portrait_crop_hints(
 
     faces = _detect_faces(portrait)
     if not faces:
+        skin_face = _guess_skin_tone_face(portrait) if is_landscape_portrait else None
+        if skin_face:
+            left, top, face_w, face_h = skin_face
+            face_center_x = left + face_w / 2
+            face_center_y = top + face_h * 0.56
+            head_top_y = max(0, top - face_h * 0.18)
+            max_dim = max(width, height)
+            max_crop = round(max_dim * 0.95)
+            blog_crop = max(default_blog_crop_size, face_w * 1.65, face_h * 1.75)
+            app_crop = max(default_app_crop_width, face_w * 1.45, face_h * 1.55)
+            return PortraitCropHints(
+                face_center_x,
+                face_center_y,
+                face_h,
+                head_top_y,
+                round(min(max_crop, app_crop)),
+                round(min(max_crop, blog_crop)),
+                is_landscape_portrait,
+                True,
+            )
         return PortraitCropHints(
             default_face_x,
             default_face_y,
-            min(width, height) * 0.26,
+            default_face_h,
+            default_head_top_y,
             default_app_crop_width,
             default_blog_crop_size,
             is_landscape_portrait,
@@ -235,6 +336,7 @@ def portrait_crop_hints(
 
     face_center_x = left + face_w / 2
     face_center_y = top + face_h * (0.62 if tightness > 0.62 else 0.56)
+    head_top_y = max(0, top - face_h * 0.18)
 
     max_dim = max(width, height)
     max_crop = round(max_dim * 0.95)
@@ -253,6 +355,7 @@ def portrait_crop_hints(
         face_x=face_center_x,
         face_y=face_center_y,
         face_height=face_h,
+        head_top_y=head_top_y,
         app_crop_width=round(min(max_crop, app_crop)),
         blog_crop_size=round(min(max_crop, blog_crop)),
         is_landscape=is_landscape_portrait,
@@ -266,16 +369,24 @@ def render_portrait_panel(
     panel_h: int,
     face_x: float,
     face_y: float,
+    head_top_y: float | None,
     crop_w: int,
     target_face_x: int,
     target_face_y: int,
+    target_head_top_y: int = 2,
 ) -> Image.Image:
     max_crop_w_without_padding = round(portrait.height * panel_w / panel_h)
     if portrait.width / portrait.height > panel_w / panel_h:
         crop_w = min(crop_w, max_crop_w_without_padding)
     crop_h = round(crop_w * panel_h / panel_w)
     crop_left = round(face_x - target_face_x * crop_w / panel_w)
-    crop_top = round(face_y - target_face_y * crop_h / panel_h)
+    face_crop_top = round(face_y - target_face_y * crop_h / panel_h)
+    if head_top_y is None:
+        crop_top = face_crop_top
+    else:
+        head_crop_top = round(head_top_y - target_head_top_y * crop_h / panel_h)
+        max_lift = round(crop_h * 0.018)
+        crop_top = face_crop_top + clamp(head_crop_top - face_crop_top, 0, max_lift)
     if crop_w <= portrait.width:
         crop_left = clamp(crop_left, 0, portrait.width - crop_w)
     if crop_h <= portrait.height:
@@ -497,6 +608,7 @@ def generate_app(
     name: str,
     face_x: float,
     face_y: float,
+    head_top_y: float | None,
     crop_w: int,
     target_face_y: int = 250,
     target_face_x_offset: int = 0,
@@ -518,6 +630,7 @@ def generate_app(
         height,
         face_x,
         face_y,
+        head_top_y,
         crop_w,
         face_panel_x,
         target_face_y,
@@ -676,9 +789,10 @@ def generate_images(
                     name,
                     crop_hints.face_x,
                     crop_hints.face_y,
+                    crop_hints.head_top_y if crop_hints.face_detected else None,
                     crop_hints.app_crop_width,
-                    355 if crop_hints.is_landscape else 250,
-                    -20 if crop_hints.is_landscape else 0,
+                    216 if crop_hints.is_landscape else 250,
+                    0,
                 )
             )
     if layout in ("both", "blog"):
